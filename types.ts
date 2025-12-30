@@ -35,5 +35,5 @@ export interface ExecutionTrace {
 export enum TabType {
   DIAGRAMS = 'DIAGRAMS',
   VISUALIZER = 'VISUALIZER',
-  LEARNING_PATH = 'LEARNING_PATH'
+  CHAT = 'CHAT'
 }

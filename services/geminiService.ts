@@ -66,7 +66,10 @@ const EXECUTION_TRACE_SCHEMA = {
         properties: {
           line: { type: Type.INTEGER, description: "Line number of the execution (1-indexed)" },
           explanation: { type: Type.STRING, description: "What happens at this step" },
-          variables: { type: Type.OBJECT, description: "JSON object representing the current state of variables" },
+          variables: { 
+            type: Type.STRING,
+            description: "JSON string representing the current state of variables as an object with variable names as keys and their stringified values"
+          },
           stack: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Call stack snapshot" }
         },
         required: ["line", "explanation", "variables", "stack"]
@@ -79,17 +82,15 @@ const EXECUTION_TRACE_SCHEMA = {
 export async function analyzeCode(code: string, language: string): Promise<AnalysisResult> {
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
-    contents: `Analyze the following ${language} code and provide architectural insights, Mermaid.js diagrams, and key concepts. Output valid JSON.
+    contents: `Analyze the following ${language} code and provide architectural insights, Mermaid.js diagrams, and key concepts. Keep explanations brief and concise. Output valid JSON.
 
-CRITICAL MERMAID SYNTAX RULES (FAILURE TO FOLLOW CAUSES ERRORS):
+CRITICAL MERMAID SYNTAX RULES:
 1. MANDATORY NEWLINES: You MUST put a newline after the diagram type declaration. 
-2. CLICK-TO-CODE: For flowchart nodes that represent specific lines of code, use IDs in the format L[number], for example: L12["Check if x > 0"].
-3. QUOTES: ALWAYS wrap node labels in double quotes.
-4. NO SEMICOLONS: Do not use semicolons (;) anywhere in the diagram.
-5. CLASS DIAGRAMS: Use "classDiagram" as the first line, then a newline, then your classes.
+2. QUOTES: ALWAYS wrap node labels in double quotes.
+3. NO SEMICOLONS: Do not use semicolons (;) anywhere in the diagram.
+4. CLASS DIAGRAMS: Use "classDiagram" as the first line, then a newline, then your classes.
 
-LINE EXPLANATIONS:
-Provide explanations for every significant line ID (L[number]) used in the diagrams.
+Keep all explanations short (1-2 sentences max). Be concise.
 
 CODE:
 ${code}`,
@@ -110,7 +111,9 @@ ${code}`,
 export async function generateTrace(code: string, language: string): Promise<ExecutionTrace> {
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
-    contents: `Simulate the step-by-step execution of this ${language} code. Provide a trace of variable states and line highlights. Focus on the most common execution path. Output valid JSON.
+    contents: `Simulate the step-by-step execution of this ${language} code. Provide a trace of variable states and line highlights. Keep explanations brief (1 sentence per step). Focus on the most common execution path. Output valid JSON.
+
+IMPORTANT: The "variables" field should be a JSON string representing an object with variable names as keys and their stringified values (e.g., "{\\"x\\": \\"5\\", \\"arr\\": \\"[1,2,3]\\", \\"flag\\": \\"true\\"}").
 
 CODE:
 ${code}`,
@@ -121,9 +124,37 @@ ${code}`,
   });
 
   try {
-    return JSON.parse(response.text);
+    const trace = JSON.parse(response.text);
+    // Parse variables string to object for each step
+    trace.steps = trace.steps.map((step: any) => ({
+      ...step,
+      variables: typeof step.variables === 'string' ? JSON.parse(step.variables) : step.variables
+    }));
+    return trace;
   } catch (e) {
     console.error("Failed to parse trace response", e);
     throw new Error("Trace generation failed.");
   }
+}
+
+export async function askQuestion(code: string, language: string, question: string, conversationHistory: Array<{role: string, content: string}> = []): Promise<string> {
+  let prompt = `You are a helpful coding assistant named as Codelens-AI. Answer questions about the provided code concisely and clearly. Keep responses brief and to the point (2-3 sentences max).\n\nHere is the ${language} code:\n\`\`\`${language}\n${code}\n\`\`\``;
+
+  // Add conversation history if provided
+  if (conversationHistory.length > 0) {
+    const historyText = conversationHistory.slice(-4).map(msg => {
+      const prefix = msg.role === 'user' ? 'User' : 'Assistant';
+      return `${prefix}: ${msg.content}`;
+    }).join('\n\n');
+    prompt = `${historyText}\n\n${prompt}`;
+  }
+
+  prompt = `${prompt}\n\nUser question: ${question}`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: prompt,
+  });
+
+  return response.text;
 }
